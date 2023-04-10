@@ -666,7 +666,7 @@ class CP_logistic_regression():
         plt.ylabel('loss')
         plt.title('loss')
 
-        prob, pred, cm, acc = self.predict()
+        logit, pred = self.predict()
         fig, axs = plt.subplots(2)
         axs[0].imshow(idx_to_oneHot(pred, self.n_classes), aspect='auto', interpolation='none')
         axs[1].imshow(idx_to_oneHot(self.y.detach().cpu().numpy(), self.n_classes), aspect='auto', interpolation='none')
