@@ -294,6 +294,7 @@ class CP_logistic_regression():
             max_iter=1000, 
             tol=1e-5, 
             patience=10,
+            weights=None,
             verbose=False,
             running_loss_logging_interval=10, 
             LBFGS_kwargs=None):
@@ -320,6 +321,11 @@ class CP_logistic_regression():
             patience (int):
                 Number of iterations with no improvement to wait
                  before early stopping.
+            weights (np.array):
+                Weights for each class.
+                If None, then all classes are weighted equally.
+                To balance the classes, set weights to be the
+                 the inverse of the class counts.
             verbose (0, 1, or 2):
                 If 0, then no output.
                 If 1, then only output whether the model has
@@ -357,7 +363,9 @@ class CP_logistic_regression():
             loss.backward()
             return loss
             
-        loss_fn = torch.nn.CrossEntropyLoss()
+        loss_fn = torch.nn.CrossEntropyLoss(
+            weight=torch.as_tensor(weights, dtype=torch.float32).to(self.device)
+        )
 
         convergence_reached = False
         for ii in range(max_iter):
@@ -385,6 +393,7 @@ class CP_logistic_regression():
             max_iter=1000, 
             tol=1e-5, 
             patience=10,
+            weights=None,
             verbose=False,
             Adam_kwargs=None):
         """
@@ -410,6 +419,11 @@ class CP_logistic_regression():
             patience (int):
                 Number of iterations with no improvement to wait
                  before early stopping.
+            weights (np.array):
+                Weights for each class.
+                If None, then all classes are weighted equally.
+                To balance the classes, set weights to be the
+                 the inverse of the class counts.
             verbose (0, 1, or 2):
                 If 0, then no output.
                 If 1, then only output whether the model has
@@ -434,7 +448,9 @@ class CP_logistic_regression():
         tl.set_backend('pytorch')
 
         optimizer = torch.optim.Adam(self.Bcp, **Adam_kwargs)
-        loss_fn = torch.nn.CrossEntropyLoss()
+        loss_fn = torch.nn.CrossEntropyLoss(
+            weight=torch.as_tensor(weights, dtype=torch.float32).to(self.device),
+        )
 
         convergence_reached = False
         for ii in range(max_iter):
@@ -458,7 +474,7 @@ class CP_logistic_regression():
         return convergence_reached
 
 
-    def predict(self, X=None, y_true=None, Bcp=None, device=None, plot_pref=False):
+    def predict(self, X=None, y_true=None, Bcp=None, device=None):
         """
         Predict class labels for X given a Bcp (beta Kruskal tensor).
         Uses 'model' function in this module.
@@ -479,9 +495,6 @@ class CP_logistic_regression():
                  what the model was trained on.
             device (str):
                 Device to run the model on.
-            plot_pref (bool):
-                If True, then make plots
-        
         Returns:
             logits (np.ndarray):
                 Raw output of the model.
