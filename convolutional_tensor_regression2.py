@@ -257,6 +257,17 @@ def conv_rrr(
         out = out + bias  ## XKLLB, shape: (m, t_x)
         return out
 
+def fn_nonNeg(arr, softplus_kwargs=None):
+    """
+    Apply softplus to specified dimensions of Bcp.
+    """
+    if softplus_kwargs is None:
+        softplus_kwargs = {
+            'beta': 50,
+            'threshold': 1,
+        }
+    return torch.nn.functional.softplus(arr, **softplus_kwargs)          
+
 class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
     def __init__(
         self, 
@@ -264,12 +275,16 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         n_features_out: int, 
         rank_normal: int=5,
         rank_complex: int=5,
+        phase_constrained: bool=False,
         window_size: int=101,
         lr: float=0.01,
         L2_B1: float=0.01,
         L2_B2: float=0.01,
         L2_K: float=0.01,
-        optimizer=torch.optim.AdamW,
+        nn_B1: bool=False,
+        nn_B2: bool=False,
+        nn_K_normal: bool=False,
+        optimizer=torch.optim.LBFGS,
         device: str='cpu',
         dtype: torch.dtype=torch.float32,
         tol_convergence: float=1e-2,
@@ -322,12 +337,16 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         self.n_features_out = n_features_out
         self.rank_normal = rank_normal
         self.rank_complex = rank_complex
+        self.phase_constrained = phase_constrained
         self.rank = rank_total
         self.window_size = window_size
         self.lr = lr
         self.L2_B1 = L2_B1
         self.L2_B2 = L2_B2
         self.L2_K = L2_K
+        self.nn_B1 = nn_B1
+        self.nn_B2 = nn_B2
+        self.nn_K_normal = nn_K_normal
         self.device = device
         self.dtype = dtype
         self.optimizer_type = optimizer
@@ -367,7 +386,7 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
     
     def init_params(self):
         shape_K_normal = (self.rank_normal, 1, self.window_size)
-        shape_K_complex = (self.rank_complex, 2, self.window_size)
+        shape_K_complex = (self.rank_complex, 2, self.window_size) if self.phase_constrained==False else (self.rank_complex, 1, self.window_size)
         shape_B1 = (self.n_features_in, self.rank)
         shape_B2 = (self.rank, self.n_features_out)
         shape_bias = (self.n_features_out, 1)
@@ -396,15 +415,32 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         return self.optimizer
 
     def forward(self, X):
-        Y_pred_normal  = conv_rrr(X=X, K=self.K_normal_, B1=self.B1_[:, :self.rank_normal], B2=self.B2_[:self.rank_normal, :], bias=self.bias_, fftconv=self.fftconv, lowMem=self.lowMem) if self.rank_normal > 0 else 0
-        Y_pred_complex = conv_rrr(X=X, K=self.K_complex_, B1=self.B1_[:, self.rank_normal:], B2=self.B2_[self.rank_normal:, :], bias=self.bias_, fftconv=self.fftconv, lowMem=self.lowMem) if self.rank_complex > 0 else 0
+        K_normal, K_complex, B1, B2, bias = self.get_nn_params()
+        Y_pred_normal  = conv_rrr(X=X, K=K_normal,  B1=B1[:, :self.rank_normal], B2=B2[:self.rank_normal, :], bias=bias, fftconv=self.fftconv, lowMem=self.lowMem) if self.rank_normal > 0  else 0
+        Y_pred_complex = conv_rrr(X=X, K=K_complex, B1=B1[:, self.rank_normal:], B2=B2[self.rank_normal:, :], bias=bias, fftconv=self.fftconv, lowMem=self.lowMem) if self.rank_complex > 0 else 0
         return Y_pred_normal + Y_pred_complex
+    
+    def get_nn_params(self):
+        K_normal = fn_nonNeg(self.K_normal_) if self.nn_K_normal else self.K_normal_
+        if self.phase_constrained and (self.rank_complex > 0):
+            K_complex = bnpm.spectral.torch_hilbert(self.K_complex_, dim=-1)
+            K_complex = torch.cat([K_complex.real, K_complex.imag], dim=1)
+        else:
+            K_complex = self.K_complex_
+        B1 = fn_nonNeg(self.B1_) if self.nn_B1 else self.B1_
+        B2 = fn_nonNeg(self.B2_) if self.nn_B2 else self.B2_
+        bias = self.bias_
+        return K_normal, K_complex, B1, B2, bias
+        
 
     def L2_regularization(self, l2_B1: float, l2_B2: float, l2_K: float):
         penalty_B1 = (l2_B1 * torch.sum(torch.stack([torch.sum(v**2) for v in [self.B1_, self.B2_, self.bias_]])))
         penalty_B2 = (l2_B2 * torch.sum(torch.stack([torch.sum(v**2) for v in [self.B1_, self.B2_, self.bias_]])))
-        penalty_K_normal = (l2_K * torch.sum(torch.stack([torch.sum(v**2) for v in [standardizer(self.K_normal_, dim=2)[0]]]))) if self.rank_normal > 0 else 0
-        penalty_K_complex = (l2_K * torch.sum(torch.stack([torch.sum(v**2) for v in [torch.linalg.norm(standardizer(self.K_complex_, dim=2), dim=1)]]))) if self.rank_complex > 0 else 0
+        penalty_K_normal  = (l2_K * torch.sum(torch.stack([torch.sum(v**2) for v in [standardizer(self.K_normal_, dim=2)[0]]]))) if self.rank_normal > 0 else 0
+        if self.phase_constrained:
+            penalty_K_complex = (l2_K * torch.sum(torch.stack([torch.sum(v**2) for v in [standardizer(self.K_complex_, dim=2)[0]]])) if self.rank_complex > 0 else 0)
+        else:
+            penalty_K_complex = (l2_K * torch.sum(torch.stack([torch.sum(v**2) for v in [torch.linalg.norm(standardizer(self.K_complex_, dim=2), dim=1)]]))) if self.rank_complex > 0 else 0
         return penalty_B1 + penalty_B2 + penalty_K_normal + penalty_K_complex
 
     def train_step(self, X, Y):
@@ -435,7 +471,7 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         X: torch.Tensor,
         Y: torch.Tensor,
         n_epochs: int=1000,
-        batched=True,
+        batched=False,
         fftconv: bool=False,
         lowMem=False,
         dataset_kwargs: dict={
@@ -470,8 +506,6 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         self.Y_std = torch.std(Y)
         Y = Y / self.Y_std
 
-        self.fftconv = FFTConvolve(x=X[:, None, :], n=X.shape[-1] + Y.shape[-1] - 1, next_fast_length=True) if fftconv else None
-
         if batched:
             dataset = torch.utils.data.TensorDataset(X.T, Y.T)
             dataloader = torch.utils.data.DataLoader(
@@ -483,6 +517,9 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
                 batch_size=1,
                 **dataloader_kwargs,
             )
+            self.fftconv = FFTConvolve(x=None, n=dataloader.sampler.batch_size + self.window_size - 1, next_fast_length=True) if fftconv else None
+        else:
+            self.fftconv = FFTConvolve(x=X.to(self.device)[:, None, :], n=X.shape[-1] + self.window_size - 1, next_fast_length=True) if fftconv else None
 
         if plot_every > 0:
             self.initialize_plot()
@@ -512,6 +549,7 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
             if batched:
                 for self.i_batch, (X, Y) in enumerate(dataloader):
                     X, Y = (arr[0].T.to(self.device) for arr in [X, Y])
+                    run_train_step(X, Y)
                     if self.converged:
                         break
             else:
@@ -552,13 +590,13 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         return Y_pred
 
     def initialize_plot(self):
-        b1, b2, k_normal, k_complex = (x.detach().cpu().numpy() for x in [self.B1_, self.B2_, self.K_normal_, self.K_complex_])
+        k_normal, k_complex, b1, b2, bias = (x.detach().cpu().numpy() for x in self.get_nn_params())
 
         self.fig, self.axs = plt.subplots(nrows=2 + self.rank, ncols=1, figsize=(5, 15))
         self.lines = {}
         
         self.axs[0].set_title("B1")
-        self.lines[0] = self.axs[0].plot(b1.T)
+        self.lines[0] = self.axs[0].plot(b1)
 
         self.axs[1].set_title("B2")
         self.lines[1] = self.axs[1].plot(b2.T)
@@ -574,7 +612,7 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         self.update_plot()
 
     def update_plot(self):
-        b1, b2, k_normal, k_complex = (x.detach().cpu().numpy() for x in [self.B1_, self.B2_, self.K_normal_, self.K_complex_])
+        k_normal, k_complex, b1, b2, bias = (x.detach().cpu().numpy() for x in self.get_nn_params())
         
         def update_ax(ax, lines, data):
             n_lines = len(lines)
@@ -582,7 +620,7 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
             ax.draw_artist(ax.patch)
             [ax.draw_artist(lines[ii]) for ii in range(n_lines)]
                     
-        update_ax(self.axs[0], self.lines[0], b1)
+        update_ax(self.axs[0], self.lines[0], b1.T)
         update_ax(self.axs[1], self.lines[1], b2)
         [update_ax(self.axs[ii + 2], self.lines[ii + 2], k) for ii, k in enumerate(k_normal)]
         [update_ax(self.axs[ii + 2 + self.rank_normal], self.lines[ii + 2 + self.rank_normal], k) for ii, k in enumerate(k_complex)]
