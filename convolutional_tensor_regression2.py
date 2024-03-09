@@ -297,6 +297,27 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         scale_init_bias: float=0.1,
         K_normal_init: torch.Tensor=None,
         K_complex_init: torch.Tensor=None,
+        n_epochs: int=1000,
+        batched: bool=False,
+        use_fftconv: bool=True,
+        lowMem: bool=True,
+        dataset_kwargs: dict={
+            'batch_size': 50000,
+            'min_batch_size': -1,
+            'randomize_batch_indices': True,
+            'shuffle_batch_order': True,
+            'shuffle_iterable_order': False,        
+        },
+        dataloader_kwargs: dict={
+            'pin_memory': False,
+            'num_workers': 0,
+            'persistent_workers': False,
+            'prefetch_factor': 2,
+        },
+        reset_optimizer_epoch_schedule: List[Optional[int]]=[0,],
+        print_every: int=-1,
+        plot_every: int=-1,
+        plot_updateLimits_every: int=3,
     ):
         """
         Convolutional Reduced Rank Regression model.
@@ -355,7 +376,16 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         self.epoch = 0
         self.i_batch = 0
 
-        self.lowMem = False
+        self.n_epochs = n_epochs
+        self.batched = batched
+        self.use_fftconv = use_fftconv
+        self.lowMem = lowMem
+        self.dataset_kwargs = dataset_kwargs
+        self.dataloader_kwargs = dataloader_kwargs
+        self.reset_optimizer_epoch_schedule = reset_optimizer_epoch_schedule
+        self.print_every = print_every
+        self.plot_every = plot_every
+        self.plot_updateLimits_every = plot_updateLimits_every
 
         self.scale_init_K_normal, self.scale_init_K_complex, self.scale_init_B1, self.scale_init_B2, self.scale_init_bias = \
             (scale_init_K_normal, scale_init_K_complex, scale_init_B1, scale_init_B2, scale_init_bias)
@@ -377,7 +407,7 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         self.K_normal_, self.K_complex_, self.B1_, self.B2_, self.bias_ = (torch.nn.Parameter(x, requires_grad=True) for x in [K_normal, K_complex, B1, B2, bias])
 
         self.optimizer = self.make_optimizer(lr=self.lr)
-        self.criteria = torch.nn.MSELoss()
+        self.criteria = torch.nn.MSELoss(reduction='mean')
         self.fftconv = None
         
         self.loss_all = {}
@@ -470,68 +500,45 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         self,
         X: torch.Tensor,
         Y: torch.Tensor,
-        n_epochs: int=1000,
-        batched=False,
-        fftconv: bool=False,
-        lowMem=False,
-        dataset_kwargs: dict={
-            'batch_size': 50000,
-            'min_batch_size': -1,
-            'randomize_batch_indices': True,
-            'shuffle_batch_order': True,
-            'shuffle_iterable_order': False,        
-        },
-        dataloader_kwargs: dict={
-            'pin_memory': False,
-            'num_workers': 0,
-            'persistent_workers': False,
-            'prefetch_factor': 2,
-        },
-        reset_optimizer_epoch_schedule: List[Optional[int]]=[0,],
-        print_every: int=-1,
-        plot_every: int=-1,
-        plot_updateLimits_every: int=3,
     ):
         assert X.ndim == 2, f"X must be 2D, got {X.ndim}D"
         assert Y.ndim == 2, f"Y must be 2D, got {Y.ndim}D"
-        assert X.shape[0] == self.n_features_in, f"X must have {self.n_features_in} features, got {X.shape[0]}"
-        assert Y.shape[0] == self.n_features_out, f"Y must have {self.n_features_out} features, got {Y.shape[0]}"
-        assert X.shape[1] == Y.shape[1], f"X and Y must have the same number of samples, got {X.shape[1]} and {Y.shape[1]}"
-
-        self.lowMem = lowMem
+        assert X.shape[1] == self.n_features_in, f"X must have {self.n_features_in} features, got {X.shape[0]}"
+        assert Y.shape[1] == self.n_features_out, f"Y must have {self.n_features_out} features, got {Y.shape[0]}"
+        assert X.shape[0] == Y.shape[0], f"X and Y must have the same number of samples, got {X.shape[1]} and {Y.shape[1]}"
         
-        X, Y = (torch.as_tensor(arr, dtype=self.dtype, device='cpu' if batched else self.device) for arr in [X, Y])
+        X, Y = (torch.as_tensor(arr.T, dtype=self.dtype, device='cpu' if self.batched else self.device) for arr in [X, Y])
         # X, Y = (standardizer(arr, dim=1) for arr in [X, Y])
         X = X / torch.std(X)
         self.Y_std = torch.std(Y)
         Y = Y / self.Y_std
 
-        if batched:
+        if self.batched:
             dataset = torch.utils.data.TensorDataset(X.T, Y.T)
             dataloader = torch.utils.data.DataLoader(
                 dataset=dataset, 
                 sampler=bnpm.torch_helpers.BatchRandomSampler(
                     len_dataset=X.shape[1],
-                    **dataset_kwargs,
+                    **self.dataset_kwargs,
                 ),
                 batch_size=1,
-                **dataloader_kwargs,
+                **self.dataloader_kwargs,
             )
-            self.fftconv = FFTConvolve(x=None, n=dataloader.sampler.batch_size + self.window_size - 1, next_fast_length=True) if fftconv else None
+            self.fftconv = FFTConvolve(x=None, n=dataloader.sampler.batch_size + self.window_size - 1, next_fast_length=True) if self.use_fftconv else None
         else:
-            self.fftconv = FFTConvolve(x=X.to(self.device)[:, None, :], n=X.shape[-1] + self.window_size - 1, next_fast_length=True) if fftconv else None
+            self.fftconv = FFTConvolve(x=X.to(self.device)[:, None, :], n=X.shape[-1] + self.window_size - 1, next_fast_length=True) if self.use_fftconv else None
 
-        if plot_every > 0:
+        if self.plot_every > 0:
             self.initialize_plot()
         def plot():
-            if plot_every > 0:
-                if (len(self.loss_all) % plot_every == 0):
+            if self.plot_every > 0:
+                if (len(self.loss_all) % self.plot_every == 0):
                     self.update_plot()
-                if (len(self.loss_all) % (plot_every * plot_updateLimits_every) == 0):
+                if (len(self.loss_all) % (self.plot_every * self.plot_updateLimits_every) == 0):
                     self.update_plot_limits()
         
         def print_loss(loss, loss_smooth, delta_window_convergence):
-            if (len(self.loss_all) % print_every == 0) and (print_every > 0):
+            if (len(self.loss_all) % self.print_every == 0) and (self.print_every > 0):
                 print(f"Epoch {self.epoch} | i_batch: {self.i_batch} | Loss: {loss} | Loss smooth: {loss_smooth} | Delta window convergence: {delta_window_convergence}")
 
         def run_train_step(X, Y):
@@ -543,10 +550,10 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
             if self.converged:
                 print(f"Converged at epoch {self.epoch} with loss {loss}")
 
-        for self.epoch in range(n_epochs):
-            if self.epoch in reset_optimizer_epoch_schedule:
+        for self.epoch in range(self.n_epochs):
+            if self.epoch in self.reset_optimizer_epoch_schedule:
                 self.optimizer = self.make_optimizer()
-            if batched:
+            if self.batched:
                 for self.i_batch, (X, Y) in enumerate(dataloader):
                     X, Y = (arr[0].T.to(self.device) for arr in [X, Y])
                     run_train_step(X, Y)
@@ -557,8 +564,8 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
             if self.converged:
                 break
     
-    def predict(self, X):
-        X = torch.as_tensor(X, dtype=self.dtype, device=self.device)
+    def predict(self, X, device_return='cpu', detach=True):
+        X = torch.as_tensor(X.T, dtype=self.dtype, device=self.device)
         X = X / torch.std(X)
         Y_std = self.Y_std if self.Y_std is not None else 1
         ## set FFTConvolve to not use precomputed x_fft
@@ -568,10 +575,13 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
                 ## set to eval mode
                 with bnpm.torch_helpers.temp_eval(self):
                     Y_pred = self.forward(X) * Y_std
+        Y_pred = Y_pred.T.to(device_return)
+        if detach:
+            Y_pred = Y_pred.detach()
         return Y_pred
     
     def predict_single_rank(self, X, rank):
-        X = torch.as_tensor(X, dtype=self.dtype, device=self.device)
+        X = torch.as_tensor(X.T, dtype=self.dtype, device=self.device)
         X = X / torch.std(X)
         Y_std = self.Y_std if self.Y_std is not None else 1
         with bnpm.misc.temp_set_attr(self.fftconv, 'use_x_fft', False):
@@ -587,7 +597,7 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
                         fftconv=self.fftconv, 
                         lowMem=self.lowMem,
                     ) * Y_std
-        return Y_pred
+        return Y_pred.T
 
     def initialize_plot(self):
         k_normal, k_complex, b1, b2, bias = (x.detach().cpu().numpy() for x in self.get_nn_params())
@@ -631,10 +641,11 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
 
     def update_plot_limits(self):
         b1, b2, k_normal, k_complex = (x.detach().cpu().numpy() for x in [self.B1_, self.B2_, self.K_normal_, self.K_complex_])
-        self.axs[0].set_ylim(np.min(b1), np.max(b1))
-        self.axs[1].set_ylim(np.min(b2), np.max(b2))
-        [self.axs[ii + 2].set_ylim(np.min(k), np.max(k)) for ii, k in enumerate(k_normal)]
-        [self.axs[ii + 2 + self.rank_normal].set_ylim(np.min(k), np.max(k)) for ii, k in enumerate(k_complex)]
+        if np.all([np.all(np.isfinite(x)) for x in [b1, b2, k_normal, k_complex]]):
+            self.axs[0].set_ylim(np.min(b1), np.max(b1))
+            self.axs[1].set_ylim(np.min(b2), np.max(b2))
+            [self.axs[ii + 2].set_ylim(np.min(k), np.max(k)) for ii, k in enumerate(k_normal)]
+            [self.axs[ii + 2 + self.rank_normal].set_ylim(np.min(k), np.max(k)) for ii, k in enumerate(k_complex)]
 
     def to_device(self, device):
         self.device = device
