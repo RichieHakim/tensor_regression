@@ -544,6 +544,7 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         def run_train_step(X, Y):
             loss = self.train_step(X=X, Y=Y)
             delta_window_convergence, loss_smooth, self.converged = self.convergence_checker(loss_single=loss)
+            self.converged = True if np.isnan(float(loss)) else self.converged
             self.loss_all[(self.epoch, self.i_batch)] = float(loss)
             plot()
             print_loss(loss, loss_smooth, delta_window_convergence)
@@ -652,6 +653,8 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
 
         self.fftconv.x_fft = self.fftconv.x_fft.to(device)
         self.fftconv.to(device)
+
+        self.Y_std = self.Y_std.to(device)
 
         self.to(self.device)
         return self
