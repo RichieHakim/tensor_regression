@@ -1,0 +1,6 @@
+## Required
+torch
+numpy
+matplotlib
+opt_einsum
+bnpm

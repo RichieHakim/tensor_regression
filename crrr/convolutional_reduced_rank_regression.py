@@ -8,8 +8,6 @@ import opt_einsum
 
 import bnpm
 
-from .util import Convergence_checker
-
     
 @torch.jit.script
 def conv_timedomain(X: torch.Tensor, K: torch.Tensor) -> torch.Tensor:
