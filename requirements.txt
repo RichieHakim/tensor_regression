@@ -4,4 +4,4 @@ torchvision
 numpy
 matplotlib
 opt_einsum
-bnpm
+bnpm[core]
