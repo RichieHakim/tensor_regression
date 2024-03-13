@@ -58,7 +58,7 @@ with open(str(dir_parent / "README.md"), "r") as f:
     readme = f.read()
 
 ## Get version number
-with open(str(dir_parent / "convolutional_reduced_rank_regression" / "__init__.py"), "r") as f:
+with open(str(dir_parent / "crrr" / "__init__.py"), "r") as f:
     for line in f:
         if line.startswith("__version__"):
             version = line.split("=")[1].strip().replace("\"", "").replace("\'", "")
