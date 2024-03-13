@@ -339,7 +339,7 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
             device (str):
                 Device to use.
         """
-        super(Convolutional_Reduced_Rank_Regression, self).__init__()
+        super().__init__()
 
         ## Assert window_size is odd
         assert window_size % 2 == 1, f"window_size must be odd, got {window_size}"
@@ -546,8 +546,9 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
 
         def run_train_step(X, Y):
             loss = float(self.train_step(X=X, Y=Y))
-            if ((loss / self.loss_previous) > self.explode_tolerance) and (self.loss_previous is not None):
-                loss = float(np.nan)
+            if self.loss_previous is not None:
+                if (loss / self.loss_previous) > self.explode_tolerance:
+                    loss = float(np.nan)
             self.loss_previous = loss
             delta_window_convergence, loss_smooth, self.converged = self.convergence_checker(loss_single=loss)
             self.loss_all[(self.epoch, self.i_batch)] = float(loss)
