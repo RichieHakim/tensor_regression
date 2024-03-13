@@ -76,7 +76,7 @@ setup(
     long_description_content_type='text/markdown',
     url='https://github.com/RichieHakim/tensor_regression',
 
-    packages=['convolutional_reduced_rank_regression'],
+    packages=['crrr'],
 
     install_requires=[],
     extras_require=extras_require,

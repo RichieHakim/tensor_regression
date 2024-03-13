@@ -1,5 +1,7 @@
+from crrr.model import Convolutional_Reduced_Rank_Regression
+
 __all__ = [
-    'convolutional_reduced_rank_regression',
+    'model',
 ]
 
 for pkg in __all__:
