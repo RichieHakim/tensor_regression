@@ -38,7 +38,7 @@ deps_core = {dep: deps_all_dict[dep] for dep in [
     'numpy',
     'matplotlib',
     'opt_einsum',
-    'bnpm',
+    'bnpm[core]',
 ]}
 
 deps_core_latest = {dep: deps_all_latest[dep] for dep in deps_core.keys()}
