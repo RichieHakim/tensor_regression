@@ -290,6 +290,7 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         tol_convergence: float=1e-2,
         max_iter_convergence: Optional[int]=None,
         window_convergence: int=10,
+        explode_tolerance: float=1e6,
         scale_init_K_normal: float=0.1,
         scale_init_K_complex: float=0.1,
         scale_init_B1: float=0.1,
@@ -361,6 +362,7 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         self.phase_constrained = phase_constrained
         self.rank = rank_total
         self.window_size = window_size
+        self.explode_tolerance = explode_tolerance
         self.lr = lr
         self.L2_B1 = L2_B1
         self.L2_B2 = L2_B2
@@ -392,14 +394,17 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         
         self.Y_std = None
 
-        self.convergence_checker = Convergence_checker(
+        self.convergence_checker = bnpm.optimization.Convergence_checker(
             tol_convergence=tol_convergence,
             fractional=True,
             window_convergence=window_convergence,
             mode='abs_less',
             max_iter=max_iter_convergence,
             max_time=None,
+            nan_policy='halt',
         )
+
+        self.loss_previous = None
 
         K_normal, K_complex, B1, B2, bias = self.init_params()
         K_normal = K_normal if K_normal_init is None else K_normal_init
@@ -482,7 +487,7 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
                 Y_hat = self.forward(X)
                 loss = self.criteria(Y_hat, Y) + self.L2_regularization(l2_B1=self.L2_B1, l2_B2=self.L2_B2, l2_K=self.L2_K)
                 loss.backward()
-                self.loss = loss.item()
+                self.loss = float(loss.item()) 
                 # self.loss = 0
                 return loss
             self.optimizer.step(closure)
@@ -493,7 +498,7 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
             loss = self.criteria(Y_hat, Y) + self.L2_regularization(l2_B1=self.L2_B1, l2_B2=self.L2_B2, l2_K=self.L2_K)
             loss.backward()
             self.optimizer.step()
-            return loss.item()
+            return float(loss.item())
             # return 0
 
     def fit(
@@ -542,9 +547,11 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
                 print(f"Epoch {self.epoch} | i_batch: {self.i_batch} | Loss: {loss} | Loss smooth: {loss_smooth} | Delta window convergence: {delta_window_convergence}")
 
         def run_train_step(X, Y):
-            loss = self.train_step(X=X, Y=Y)
+            loss = float(self.train_step(X=X, Y=Y))
+            if ((loss / self.loss_previous) > self.explode_tolerance) and (self.loss_previous is not None):
+                loss = float(np.nan)
+            self.loss_previous = loss
             delta_window_convergence, loss_smooth, self.converged = self.convergence_checker(loss_single=loss)
-            self.converged = True if np.isnan(float(loss)) else self.converged
             self.loss_all[(self.epoch, self.i_batch)] = float(loss)
             plot()
             print_loss(loss, loss_smooth, delta_window_convergence)
