@@ -47,8 +47,7 @@ jobs:
           # "3.12",
         ]
         extra: [
-          core_cv2Headless,
-          core_latest_cv2Headless,
+          all,
         ]
         install-level: [
           system,
