@@ -264,7 +264,7 @@ def fn_nonNeg(arr, softplus_kwargs=None):
     if softplus_kwargs is None:
         softplus_kwargs = {
             'beta': 50,
-            'threshold': 1,
+            'threshold': 10,
         }
     return torch.nn.functional.softplus(arr, **softplus_kwargs)          
 
