@@ -416,9 +416,6 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         K_complex = K_complex if K_complex_init is None else K_complex_init
         self.K_normal_, self.K_complex_, self.B1_, self.B2_, self.bias_ = (torch.nn.Parameter(x, requires_grad=True) for x in [K_normal, K_complex, B1, B2, bias])
 
-        print(f"Any NaNs in B1 419: {torch.any(torch.isnan(self.B1_))}")
-        print(f"Any NaNs in B1 420: {torch.any(torch.isnan(self.parameters()['B1_']))}")
-
         self.optimizer = self.make_optimizer(lr=self.lr)
         self.criteria = torch.nn.MSELoss(reduction='mean')
         self.fftconv = None
@@ -444,16 +441,15 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         shape_bias = (self.n_features_out, 1)
         K_normal, K_complex, B1, B2, bias = (torch.nn.init.orthogonal_(torch.empty(s, dtype=self.dtype, device=self.device)) for s in [shape_K_normal, shape_K_complex, shape_B1, shape_B2, shape_bias])
         K_normal, K_complex = standardizer(K_normal, dim=2) if self.rank_normal > 0 else K_normal, standardizer(K_complex, dim=2) if self.rank_complex > 0 else K_complex
-        print(f"Any NaNs in B1 444: {torch.any(torch.isnan(B1))}")
-        B1, B2, bias = standardizer(B1, dim=1), standardizer(B2, dim=1), standardizer(bias, dim=0)
-        print(f"Any NaNs in B1 446: {torch.any(torch.isnan(B1))}")
+        B1 = standardizer(B1, dim=0) if B1.shape[0] > 0 else B1
+        B2 = standardizer(B2, dim=1) if B2.shape[1] > 0 else B2
+        bias = standardizer(bias, dim=0) if bias.shape[0] > 0 else bias
         K_normal, K_complex = ((K / torch.std(torch.linalg.norm(K, dim=1, keepdim=True), dim=2, keepdim=True)) if K.shape[0] > 0 else K for K in [K_normal, K_complex])
 
         K_normal *= self.scale_init_K_normal
         K_complex *= self.scale_init_K_complex
         B1 *= self.scale_init_B1
         B2 *= self.scale_init_B2
-        print(f"Any NaNs in B1 453: {torch.any(torch.isnan(B1))}")
         bias *= self.scale_init_bias
         
         return K_normal, K_complex, B1, B2, bias
