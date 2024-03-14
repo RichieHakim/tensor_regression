@@ -8,7 +8,6 @@ import opt_einsum
 
 import bnpm
 
-    
 @torch.jit.script
 def conv_timedomain(X: torch.Tensor, K: torch.Tensor) -> torch.Tensor:
     # X  ## shape: (n, t_x)
@@ -506,9 +505,9 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
     ):
         assert X.ndim == 2, f"X must be 2D, got {X.ndim}D"
         assert Y.ndim == 2, f"Y must be 2D, got {Y.ndim}D"
-        assert X.shape[1] == self.n_features_in, f"X must have {self.n_features_in} features, got {X.shape[0]}"
-        assert Y.shape[1] == self.n_features_out, f"Y must have {self.n_features_out} features, got {Y.shape[0]}"
-        assert X.shape[0] == Y.shape[0], f"X and Y must have the same number of samples, got {X.shape[1]} and {Y.shape[1]}"
+        assert X.shape[1] == self.n_features_in, f"X must have {self.n_features_in} features, got {X.shape[1]}"
+        assert Y.shape[1] == self.n_features_out, f"Y must have {self.n_features_out} features, got {Y.shape[1]}"
+        assert X.shape[0] == Y.shape[0], f"X and Y must have the same number of samples, got {X.shape[0]} and {Y.shape[0]}"
         
         X, Y = (torch.as_tensor(arr.T, dtype=self.dtype, device='cpu' if self.batched else self.device) for arr in [X, Y])
         # X, Y = (standardizer(arr, dim=1) for arr in [X, Y])
@@ -517,11 +516,11 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         Y = Y / self.Y_std
 
         if self.batched:
-            dataset = torch.utils.data.TensorDataset(X.T, Y.T)
+            dataset = torch.utils.data.TensorDataset(X, Y)
             dataloader = torch.utils.data.DataLoader(
                 dataset=dataset, 
                 sampler=bnpm.torch_helpers.BatchRandomSampler(
-                    len_dataset=X.shape[1],
+                    len_dataset=X.shape[0],
                     **self.dataset_kwargs,
                 ),
                 batch_size=1,
