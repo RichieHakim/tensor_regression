@@ -477,7 +477,8 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
 
     def train_step(self, X, Y):
         ## If optimizer is LBFGS, use closure
-        torch.cuda.synchronize(device=None)
+        if self.device != 'cpu':
+            torch.cuda.synchronize(device=None)
         if self.optimizer_type == torch.optim.LBFGS:
             def closure():
                 self.optimizer.zero_grad()
