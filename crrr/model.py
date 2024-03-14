@@ -191,6 +191,14 @@ class FFTConvolve(torch.nn.Module):
             self.n = next_fast_len(size=n)
         self.x_fft = torch.fft.fft(x, n=self.n, dim=-1).contiguous()
 
+        ## Check for any NaNs or inf or weird values in x_fft
+        if torch.any(torch.isnan(self.x_fft)):
+            raise ValueError(f"x_fft has NaNs")
+        if torch.any(torch.isinf(self.x_fft)):
+            raise ValueError(f"x_fft has infs")
+        if torch.any(torch.abs(self.x_fft) > 1e6):
+            raise ValueError(f"x_fft has values > 1e6")
+
     def forward(
         self,
         x: torch.Tensor,
@@ -415,7 +423,16 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         self.loss_all = {}
         
         self.to(self.device)
-    
+
+        ## Check for any NaNs or inf or weird values in parameters
+        for name, param in self.named_parameters():
+            if torch.any(torch.isnan(param)):
+                raise ValueError(f"Parameter {name} has NaNs")
+            if torch.any(torch.isinf(param)):
+                raise ValueError(f"Parameter {name} has infs")
+            if torch.any(torch.abs(param) > 1e6):
+                raise ValueError(f"Parameter {name} has values > 1e6")
+            
     def init_params(self):
         shape_K_normal = (self.rank_normal, 1, self.window_size)
         shape_K_complex = (self.rank_complex, 2, self.window_size) if self.phase_constrained==False else (self.rank_complex, 1, self.window_size)
@@ -515,6 +532,15 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         X = X / torch.std(X)
         self.Y_std = torch.std(Y)
         Y = Y / self.Y_std
+
+        ## Check for any NaNs or inf or weird values in inputs
+        for name, arr in zip(['X', 'Y'], [X, Y]):
+            if torch.any(torch.isnan(arr)):
+                raise ValueError(f"Input {name} has NaNs")
+            if torch.any(torch.isinf(arr)):
+                raise ValueError(f"Input {name} has infs")
+            if torch.any(torch.abs(arr) > 1e6):
+                raise ValueError(f"Input {name} has values > 1e6")
 
         if self.batched:
             dataset = torch.utils.data.TensorDataset(X, Y)
