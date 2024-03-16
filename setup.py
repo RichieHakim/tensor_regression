@@ -37,6 +37,7 @@ deps_core = {dep: deps_all_dict[dep] for dep in [
     'torch',
     'numpy',
     'matplotlib',
+    'psycopg2',
     'opt_einsum',
     'bnpm[core_cv2Headless]',
 ]}
