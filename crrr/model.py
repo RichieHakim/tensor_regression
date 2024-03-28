@@ -108,15 +108,15 @@ def apply_padding_mode(
     else:
         raise ValueError(f"Unrecognized mode value '{mode}'. Please specify one of {valid_convolve_modes}.")
 
-
 # @torch.jit.script
 def fftconvolve(
-    x: torch.Tensor, 
     y: torch.Tensor, 
+    x: Optional[torch.Tensor]=None,
     mode: str='valid',
     n: Optional[int]=None,
     fast_length: bool=False,
     x_fft: Optional[torch.Tensor]=None,
+    return_real: bool=True,
 ):
     """
     Convolution using the FFT method. \n
@@ -130,38 +130,55 @@ def fftconvolve(
     RH 2024
 
     Args:
-        x (torch.Tensor):
-            First input. (signal) \n
-            Convolution performed along the last dimension.
         y (torch.Tensor):
             Second input. (kernel) \n
             Convolution performed along the last dimension.
+        x (torch.Tensor):
+            First input. (signal) \n
+            Convolution performed along the last dimension.\n
+            If None, x_fft must be provided.
         mode (str):
             Padding mode to use. ['full', 'valid', 'same']
         fast_length (bool):
             Whether to use scipy.fftpack.next_fast_len to 
              find the next fast length for the FFT.
             Set to False if you want to use backpropagation.
+        n (int):
+            Length of the fft domain. If None, n is computed from x and y.\n
+            If n is less than the length of x and y, then the output will be
+            truncated.
+        x_fft (torch.Tensor):
+            FFT of x. If None, x is used to compute the FFT.\n
+            If x is provided, x_fft must be None. If x_fft is provided, x must
+            be None.
+        return_real (bool):
+            Whether to return the real part of the convolution.
+            If False, the complex result is returned as well.
 
     Returns:
         torch.Tensor:
             Result of the convolution.
     """
     ## Compute the convolution
+    n_original = x.shape[-1] + y.shape[-1] - 1
     if x_fft is None:
-        n_original = x.shape[-1] + y.shape[-1] - 1
-        # n = scipy.fftpack.next_fast_len(n_original) if fast_length else n_original
-        if fast_length:
-            n = next_fast_len(n if n is not None else n_original) 
-        else:
+        if n is None:
             n = n_original
+            # n = scipy.fftpack.next_fast_len(n_original) if fast_length else n_original
+            if fast_length:
+                n = next_fast_len(n_original)
+            else:
+                n = n_original
+        else:
+            n = n
         x_fft = torch.fft.fft(x, n=n, dim=-1)            
     else:
         n = x_fft.shape[-1] if x_fft is not None else n
     
-    y_fft = torch.fft.fft(y, n=n, dim=-1)
+    y_fft = torch.fft.fft(torch.flip(y, dims=(-1,)), n=n, dim=-1)
     f = x_fft * y_fft
     fftconv_xy = torch.fft.ifft(f, n=n, dim=-1)
+    fftconv_xy = fftconv_xy.real if return_real else fftconv_xy
     return apply_padding_mode(
         conv_result=fftconv_xy,
         x_length=x.shape[-1],
@@ -515,7 +532,6 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
             loss.backward()
             self.optimizer.step()
             return float(loss.item())
-            # return 0
 
     def fit(
         self,
