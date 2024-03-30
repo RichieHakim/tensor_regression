@@ -447,8 +447,8 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
                 raise ValueError(f"Parameter {name} has NaNs")
             if torch.any(torch.isinf(param)):
                 raise ValueError(f"Parameter {name} has infs")
-            if torch.any(torch.abs(param) > 1e6):
-                raise ValueError(f"Parameter {name} has values > 1e6")
+            if torch.any(torch.abs(param) > 1e16):
+                raise ValueError(f"Parameter {name} has values > 1e16")
             
     def init_params(self):
         shape_K_normal = (self.rank_normal, 1, self.window_size)
@@ -458,9 +458,9 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         shape_bias = (self.n_features_out, 1)
         K_normal, K_complex, B1, B2, bias = (torch.nn.init.orthogonal_(torch.empty(s, dtype=self.dtype, device=self.device)) for s in [shape_K_normal, shape_K_complex, shape_B1, shape_B2, shape_bias])
         K_normal, K_complex = standardizer(K_normal, dim=2) if self.rank_normal > 0 else K_normal, standardizer(K_complex, dim=2) if self.rank_complex > 0 else K_complex
-        B1 = standardizer(B1, dim=0) if B1.shape[0] > 0 else B1
-        B2 = standardizer(B2, dim=1) if B2.shape[1] > 0 else B2
-        bias = standardizer(bias, dim=0) if bias.shape[0] > 0 else bias
+        B1 = standardizer(B1, dim=0) if B1.shape[0] > 1 else B1
+        B2 = standardizer(B2, dim=1) if B2.shape[1] > 1 else B2
+        bias = standardizer(bias, dim=0) if bias.shape[0] > 1 else bias
         K_normal, K_complex = ((K / torch.std(torch.linalg.norm(K, dim=1, keepdim=True), dim=2, keepdim=True)) if K.shape[0] > 0 else K for K in [K_normal, K_complex])
 
         K_normal *= self.scale_init_K_normal
