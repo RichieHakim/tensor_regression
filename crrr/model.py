@@ -615,11 +615,21 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
                 break
     
     def predict(self, X, device_return='cpu', detach=True):
+        from contextlib import contextmanager
+        null_context = contextmanager(lambda: (yield))
+        if (self.fftconv is None) or (self.use_fftconv == False):
+            context_fftconv = null_context() 
+        else:
+            context_fftconv = bnpm.misc.MultiContextManager(
+                bnpm.misc.temp_set_attr(self.fftconv, 'use_x_fft', False), 
+                bnpm.misc.temp_set_attr(self.fftconv, 'n', None),
+            )
+
         X = torch.as_tensor(X.T, dtype=self.dtype, device=self.device)
         X = X / torch.std(X)
         Y_std = self.Y_std if self.Y_std is not None else 1
         ## set FFTConvolve to not use precomputed x_fft
-        with bnpm.misc.temp_set_attr(self.fftconv, 'use_x_fft', False):
+        with context_fftconv:
             ## set requires_grad to False
             with torch.no_grad():
                 ## set to eval mode
