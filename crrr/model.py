@@ -214,7 +214,7 @@ class FFTConvolve(torch.nn.Module):
         if torch.any(torch.isinf(self.x_fft)):
             raise ValueError(f"x_fft has infs")
         if torch.any(torch.abs(self.x_fft) > 1e6):
-            raise ValueError(f"x_fft has values > 1e6")
+            raise ValueError(f"x_fft has values > 1e16")
 
     def forward(
         self,
