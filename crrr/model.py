@@ -242,42 +242,32 @@ def conv_rrr(
     B2: torch.Tensor,
     bias: torch.Tensor,
     fftconv: Optional[FFTConvolve]=None,
-    lowMem: bool=False,
 ) -> torch.Tensor:
+    # X  ## shape: (n, t_x)
+    # K  ## shape: (k, 1 or 2, t_k)
+    # B1  ## shape: (n, k)
+    # B2  ## shape: (k, m)
+    # bias  ## shape: (m,)
+    # out = conv(X, K)  ## XK, shape: (n, k, t_x)
     conv = fftconv if fftconv is not None else conv_timedomain
-    if lowMem:
-        # K  ## shape: (k, 2, t_k)
-        # B1  ## shape: (n, k)
-        # B2  ## shape: (k, m)
-        # bias  ## shape: (m,)
-        if fftconv is not None:
-            K = torch.view_as_complex(K.permute(0, 2, 1).contiguous())[:, None, :] if K.shape[1] > 1 else K
-            X = X[:, None, :]
-            abs_wrapper = lambda x: torch.abs(x) if torch.is_complex(K) else torch.real(x)
-        else:
-            abs_wrapper = lambda x: x
-        out = torch.cat([opt_einsum.contract('nkt, nk -> kt', standardizer(abs_wrapper(conv(X, K[ii][None, :, :])), dim=2), B1[:, ii][:, None]) for ii in range(K.shape[0])], dim=0)  ## XKL, shape: (k, t_x)
-        out = torch.einsum('kt, km -> mt', out, B2)  ## XKLL, shape: (m, t_x)
-        out = out + bias  ## XKLLB, shape: (m, t_x)
-        return out
+
+    # X @ B1
+    out = torch.einsum('nt, nk -> kt', X, B1)  ## XKL, shape: (k, t_x)
+    # conv(XB, K)
+    if fftconv is None:
+        out = conv(out, K)  ## XBK, shape: (k, t_x)
     else:
-        # K  ## shape: (k, 2, t_k)
-        # B1  ## shape: (n, k)
-        # B2  ## shape: (k, m)
-        # bias  ## shape: (m,)
-        # out = conv(X, K)  ## XK, shape: (n, k, t_x)
-        if fftconv is None:
-            out = conv(X, K)  ## XK, shape: (n, k, t_x)
-        else:
-            K = torch.view_as_complex(K.permute(0, 2, 1).contiguous())[None, :, :] if K.shape[1] == 2 else K.permute(1, 0, 2)
-            abs_wrapper = lambda x: torch.abs(x) if torch.is_complex(K) else x
-            out = abs_wrapper(conv(X[:, None, :], K))  ## XK, shape: (n, k, t_x)
-        out = standardizer(out, dim=2)  ## XK_s, shape: (n, k, t_x)
-        # out = torch.einsum('nkt, nk -> kt', out, B1)  ## XKL, shape: (k, t_x)
-        # out = torch.einsum('kt, km -> mt', out, B2)  ## XKLL, shape: (m, t_x)
-        out = opt_einsum.contract('nkt, nk, km -> mt', out, B1, B2)  ## XKLL, shape: (m, t_x)
-        out = out + bias  ## XKLLB, shape: (m, t_x)
-        return out
+        K = torch.view_as_complex(K.permute(0, 2, 1).contiguous())[:, :] if K.shape[1] == 2 else K.permute(1, 0, 2)[0]  ## reshapes K to (k, t_k)
+        abs_wrapper = lambda x: torch.abs(x) if torch.is_complex(K) else x
+        out = abs_wrapper(conv(out[:, :], K))  ## XBK, shape: (k, t_x)
+    out = standardizer(out, dim=1)  ## XBK_s, shape: (k, t_x)
+    # out @ B2
+    out = torch.einsum('kt, km -> mt', out, B2)  ## XBKLL, shape: (m, t_x)
+    out = out + bias  ## XBKLLB, shape: (m, t_x)
+    # out = out + bias[:,0][:,None]  ## XBKLLB, shape: (m, t_x)
+    # out = torch.nn.functional.gelu(out)  ## XBKLLB, shape: (m, t_x)
+    # out = out + bias[:,1][:,None]  ## XBKLLB, shape: (m, t_x)
+    return out
 
 def fn_nonNeg(arr, softplus_kwargs=None):
     """
@@ -323,7 +313,6 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         n_epochs: int=1000,
         batched: bool=False,
         use_fftconv: bool=True,
-        lowMem: bool=True,
         dataset_kwargs: dict={
             'batch_size': 50000,
             'min_batch_size': -1,
@@ -403,7 +392,6 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         self.n_epochs = n_epochs
         self.batched = batched
         self.use_fftconv = use_fftconv
-        self.lowMem = lowMem
         self.dataset_kwargs = dataset_kwargs
         self.dataloader_kwargs = dataloader_kwargs
         self.reset_optimizer_epoch_schedule = reset_optimizer_epoch_schedule
@@ -456,6 +444,7 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
         shape_B1 = (self.n_features_in, self.rank)
         shape_B2 = (self.rank, self.n_features_out)
         shape_bias = (self.n_features_out, 1)
+        # shape_bias = (self.n_features_out, 2)
         K_normal, K_complex, B1, B2, bias = (torch.nn.init.orthogonal_(torch.empty(s, dtype=self.dtype, device=self.device)) for s in [shape_K_normal, shape_K_complex, shape_B1, shape_B2, shape_bias])
         K_normal, K_complex = standardizer(K_normal, dim=2) if self.rank_normal > 0 else K_normal, standardizer(K_complex, dim=2) if self.rank_complex > 0 else K_complex
         B1 = standardizer(B1, dim=0) if B1.shape[0] > 1 else B1
@@ -483,8 +472,8 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
 
     def forward(self, X):
         K_normal, K_complex, B1, B2, bias = self.get_nn_params()
-        Y_pred_normal  = conv_rrr(X=X, K=K_normal,  B1=B1[:, :self.rank_normal], B2=B2[:self.rank_normal, :], bias=bias, fftconv=self.fftconv, lowMem=self.lowMem) if self.rank_normal > 0  else 0
-        Y_pred_complex = conv_rrr(X=X, K=K_complex, B1=B1[:, self.rank_normal:], B2=B2[self.rank_normal:, :], bias=bias, fftconv=self.fftconv, lowMem=self.lowMem) if self.rank_complex > 0 else 0
+        Y_pred_normal  = conv_rrr(X=X, K=K_normal,  B1=B1[:, :self.rank_normal], B2=B2[:self.rank_normal, :], bias=bias, fftconv=self.fftconv) if self.rank_normal > 0  else 0
+        Y_pred_complex = conv_rrr(X=X, K=K_complex, B1=B1[:, self.rank_normal:], B2=B2[self.rank_normal:, :], bias=bias, fftconv=self.fftconv) if self.rank_complex > 0 else 0
         return Y_pred_normal + Y_pred_complex
     
     def get_nn_params(self):
@@ -572,7 +561,8 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
             )
             self.fftconv = FFTConvolve(x=None, n=dataloader.sampler.batch_size + self.window_size - 1, next_fast_length=True) if self.use_fftconv else None
         else:
-            self.fftconv = FFTConvolve(x=X.to(self.device)[:, None, :], n=X.shape[-1] + self.window_size - 1, next_fast_length=True) if self.use_fftconv else None
+            # self.fftconv = FFTConvolve(x=X.to(self.device)[:, None, :], n=X.shape[-1] + self.window_size - 1, next_fast_length=True) if self.use_fftconv else None
+            self.fftconv = FFTConvolve(x=None, n=X.shape[-1] + self.window_size - 1, next_fast_length=True) if self.use_fftconv else None
 
         if self.plot_every > 0:
             self.initialize_plot()
@@ -655,7 +645,6 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
                         B2=self.B2_[rank, :][None, :], 
                         bias=self.bias_, 
                         fftconv=self.fftconv, 
-                        lowMem=self.lowMem,
                     ) * Y_std
         return Y_pred.T
 
@@ -710,8 +699,10 @@ class Convolutional_Reduced_Rank_Regression(torch.nn.Module):
     def to_device(self, device):
         self.device = device
 
-        self.fftconv.x_fft = self.fftconv.x_fft.to(device)
-        self.fftconv.to(device)
+        if hasattr(self, 'fftconv'):
+            if hasattr(self.fftconv, 'x_fft') and (self.fftconv.x_fft is not None):
+                self.fftconv.x_fft = self.fftconv.x_fft.to(device)
+            self.fftconv.to(device)
 
         self.Y_std = self.Y_std.to(device)
 
